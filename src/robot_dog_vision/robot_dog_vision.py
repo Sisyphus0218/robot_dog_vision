@@ -30,6 +30,7 @@ class RobotDogVision:
         intrinsics: np.ndarray | None = None,
         mode: ControlMode = ControlMode.HUMAN_FOLLOW,
         device: str = "cpu",
+        enable_reid: bool = True,
     ) -> None:
         load_dotenv()
         yolo_model_path = load_model_path("YOLO_MODEL_PATH")
@@ -38,7 +39,6 @@ class RobotDogVision:
 
         feature_dim = target_feature_memory.feature_dim
         feature_extractor = FeatureExtractor(
-            model_name="osnet_x0_25",
             model_path=osnet_model_path,
             feature_dim=feature_dim,
             device=device,
@@ -64,6 +64,7 @@ class RobotDogVision:
             negative_feature_memory=negative_feature_memory,
             target_classifier=target_classifier,
             config=None,
+            enable_reid=enable_reid,
         )
         self.pose_estimator = PoseEstimator(model_path=pose_model_path)
 

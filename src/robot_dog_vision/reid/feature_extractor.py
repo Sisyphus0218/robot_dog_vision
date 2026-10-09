@@ -2,37 +2,52 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import openvino as ov
 import torch
 import torch.nn.functional as F
-from torchreid.reid.utils import FeatureExtractor as TorchReIDFeatureExtractor
 
 
 class FeatureExtractor:
     def __init__(
         self,
-        model_name: str,
         model_path: str | Path,
         feature_dim: int = 512,
         device: str = "cpu",
     ) -> None:
-        self.model_name = model_name
         self.model_path = Path(model_path)
         self.feature_dim = feature_dim
         self.device = device
 
-        self._model: TorchReIDFeatureExtractor | None = None
+        self._compiled_model = None
+        self._output = None
 
-    def _get_model(self) -> TorchReIDFeatureExtractor:
-        if self._model is None:
-            self._model = TorchReIDFeatureExtractor(
-                model_name=self.model_name,
-                model_path=str(self.model_path),
-                device=self.device,
-                verbose=False,
+    def _get_model(self):
+        if self._compiled_model is None:
+            core = ov.Core()
+            self._compiled_model = core.compile_model(
+                str(self.model_path),
+                self.device.upper(),
+                {"PERFORMANCE_HINT": "LATENCY"},
             )
-        return self._model
+            self._output = self._compiled_model.output(0)
+        return self._compiled_model
 
-    @torch.inference_mode()
+    @staticmethod
+    def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        image_rgb = cv2.resize(
+            image_rgb,
+            (128, 256),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+        image = image_rgb.astype(np.float32) / 255.0
+        mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+        image = (image - mean) / std
+
+        return image.transpose(2, 0, 1)
+
     def extract_features(
         self,
         bgr_images: np.ndarray | list[np.ndarray],
@@ -52,6 +67,21 @@ class FeatureExtractor:
         if not bgr_images:
             raise ValueError("No images provided for feature extraction.")
 
-        rgb_images = [cv2.cvtColor(image, cv2.COLOR_BGR2RGB) for image in bgr_images]
-        features = self._get_model()(rgb_images)
+        batch = np.stack(
+            [self._preprocess(image) for image in bgr_images],
+            axis=0,
+        )
+
+        model = self._get_model()
+        output = model(batch)[self._output]
+        features = torch.from_numpy(
+            np.asarray(output, dtype=np.float32).copy()
+        )
+
+        if features.ndim != 2 or features.shape[1] != self.feature_dim:
+            raise RuntimeError(
+                f"Expected features with shape (N, {self.feature_dim}), "
+                f"got {tuple(features.shape)}"
+            )
+
         return F.normalize(features, p=2, dim=1)

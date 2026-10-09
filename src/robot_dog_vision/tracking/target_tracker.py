@@ -21,7 +21,7 @@ class TargetTrackerConfig:
     reid_keep_threshold: float = 0.35
     reid_reject_threshold: float = 0.25
 
-    reid_validation_interval: int = 5
+    reid_validation_interval: int = 15
     reid_validation_tolerance: int = 2
     missing_frame_tolerance: int = 3
 
@@ -40,7 +40,9 @@ class TargetTracker:
         negative_feature_memory: FeatureMemory,
         target_classifier: TargetClassifier,
         config: TargetTrackerConfig | None = None,
+        enable_reid: bool = True,
     ) -> None:
+        self.enable_reid = enable_reid
         self.feature_extractor = feature_extractor
         self.positive_feature_memory = positive_feature_memory
         self.negative_feature_memory = negative_feature_memory
@@ -362,6 +364,17 @@ class TargetTracker:
         frame_index: int,
     ) -> BBox | None:
         """Update tracking state and return the target box, or None if absent."""
+        if not self.enable_reid:
+            if not tracked_persons:
+                self.state = "SEARCHING"
+                self.target_track_id = None
+                return None
+
+            target = max(tracked_persons, key=lambda person: person.confidence)
+            self.state = "TRACKING"
+            self.target_track_id = target.track_id
+            return target.bbox
+
         target = self.update_target_state(
             frame=frame_bgr,
             tracked_persons=tracked_persons,

@@ -2,8 +2,12 @@ import argparse
 from pathlib import Path
 from urllib.request import urlretrieve
 
+import openvino as ov
+import torch
 from dotenv import set_key
 from huggingface_hub import hf_hub_download
+from torchreid.reid import models
+from torchreid.reid.utils import load_pretrained_weights
 from tqdm import tqdm
 from ultralytics import YOLO
 
@@ -31,28 +35,50 @@ def download_checkpoints(checkpoints_dir: str | Path) -> None:
     print()
 
     # YOLO
-    print("Downloading YOLO26-N...")
+    print("Preparing YOLO26-N...")
     yolo_path = checkpoints_dir / "yolo" / "yolo26n.pt"
     yolo_path.parent.mkdir(parents=True, exist_ok=True)
-    YOLO(yolo_path)
-    if not yolo_path.is_file():
-        raise FileNotFoundError(f"YOLO checkpoint was not created: {yolo_path}")
-    print(f"YOLO26-N is ready: {yolo_path}")
+    model = YOLO(yolo_path)
+    yolo_model_path = Path(
+        model.export(format="openvino", imgsz=512, device="cpu")
+    ).resolve()
+    print(f"YOLO26-N is ready: {yolo_model_path}")
 
     # OSNet
-    print("\nDownloading OSNet...")
-    osnet_path = hf_hub_download(
-        repo_id="kaiyangzhou/osnet",
-        filename=(
-            "osnet_x0_25_msmt17_combineall_256x128_amsgrad_ep150_stp60_"
-            "lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth"
-        ),
-        local_dir=checkpoints_dir / "osnet",
+    print("\nPreparing OSNet...")
+    osnet_path = Path(
+        hf_hub_download(
+            repo_id="kaiyangzhou/osnet",
+            filename=(
+                "osnet_x0_25_msmt17_combineall_256x128_amsgrad_ep150_stp60_"
+                "lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth"
+            ),
+            local_dir=checkpoints_dir / "osnet",
+        )
+    ).resolve()
+
+    osnet_model = models.build_model(
+        name="osnet_x0_25",
+        num_classes=1000,
+        loss="softmax",
+        pretrained=False,
+        use_gpu=False,
     )
-    osnet_path = Path(osnet_path).resolve()
-    if not osnet_path.is_file():
-        raise FileNotFoundError(f"OSNet checkpoint was not created: {osnet_path}")
-    print(f"OSNet is ready: {osnet_path}")
+    load_pretrained_weights(osnet_model, str(osnet_path))
+    osnet_model.eval()
+
+    dummy_input = torch.randn(1, 3, 256, 128)
+    openvino_osnet = ov.convert_model(osnet_model, example_input=dummy_input)
+    openvino_osnet.reshape(
+        {openvino_osnet.input(0): ov.PartialShape([-1, 3, 256, 128])}
+    )
+
+    osnet_model_path = (
+        checkpoints_dir / "osnet" / "osnet_x0_25_openvino" / "osnet_x0_25.xml"
+    )
+    osnet_model_path.parent.mkdir(parents=True, exist_ok=True)
+    ov.save_model(openvino_osnet, osnet_model_path, compress_to_fp16=False)
+    print(f"OSNet is ready: {osnet_model_path}")
 
     # MediaPipe
     print("\nDownloading MediaPipe...")
@@ -91,8 +117,8 @@ def download_checkpoints(checkpoints_dir: str | Path) -> None:
     ENV_PATH.touch(exist_ok=True)
     model_paths = {
         "CHECKPOINTS_DIR": checkpoints_dir,
-        "YOLO_MODEL_PATH": yolo_path,
-        "OSNET_MODEL_PATH": osnet_path,
+        "YOLO_MODEL_PATH": yolo_model_path,
+        "OSNET_MODEL_PATH": osnet_model_path,
         "POSE_MODEL_PATH": mediapipe_path,
     }
     for key, path in model_paths.items():

@@ -11,7 +11,7 @@ def load_model_path(env_key: str) -> Path:
         )
 
     path = Path(value)
-    if not path.is_file():
-        raise FileNotFoundError(f"{env_key} points to a missing file: {path}")
+    if not path.exists():
+        raise FileNotFoundError(f"{env_key} points to a missing model path: {path}")
 
     return path

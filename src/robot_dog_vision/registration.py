@@ -74,7 +74,6 @@ def register(
     # ---------- Extract Features ----------
     feature_extractor_model_path = load_model_path("OSNET_MODEL_PATH")
     feature_extractor = FeatureExtractor(
-        model_name="osnet_x0_25",
         model_path=feature_extractor_model_path,
         feature_dim=512,
         device=device,
