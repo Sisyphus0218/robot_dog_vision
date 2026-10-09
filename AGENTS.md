@@ -10,9 +10,11 @@ Package code lives under `src/robot_dog_vision/`. The top-level pipeline is in `
 
 - `uv sync --extra cpu` installs Python 3.12 dependencies with CPU PyTorch.
 - `uv sync --extra cu130` installs the CUDA 13.0 PyTorch variant.
-- `uv run python scripts/download_checkpoints.py` downloads YOLO, OSNet, and MediaPipe models and records their paths in `.env`.
+- `uv run python scripts/download_checkpoints.py` downloads the model checkpoints, exports YOLO and OSNet to OpenVINO for CPU inference, and records their paths in `.env`.
 - `uv build` creates wheel and source distributions.
-- `uv run python tests/test_video.py` runs the offline video pipeline. Other `tests/test_*.py` scripts exercise registration or specific camera sources and may require local input files or hardware.
+- `uv run python tests/test_video.py --video-path <path> --target-dir <path> --results-dir <path> --device cpu --reid` runs the offline color-video pipeline.
+- `uv run python tests/test_db3.py --bag-path <path> --target-dir <path> --results-dir <path> --device cpu --reid` runs the recorded RGB-D pipeline. Use `--no-reid` instead of `--reid` to select the highest-confidence tracked person without appearance matching.
+- Other `tests/test_*.py` scripts exercise registration or hardware-specific camera sources and may require local input files or devices.
 
 ## Coding Style & Naming Conventions
 
@@ -24,4 +26,4 @@ Name new tests `test_<behavior>.py` and test functions `test_<behavior>`. Separa
 
 ## Commit & Pull Request Guidelines
 
-This repository has no existing commit history, so use concise imperative subjects, optionally with a scope, such as `tracking: handle lost targets`. Keep each commit focused. Pull requests should explain the behavior change, list commands run, identify required hardware/models, and link relevant issues. Include representative screenshots or short output samples for visualization changes; never commit `.env`, checkpoints, input recordings, or generated results.
+Use concise imperative commit subjects, optionally with a scope, such as `tracking: handle lost targets`. Keep each commit focused. Pull requests should explain the behavior change, list commands run, identify required hardware/models, and link relevant issues. Include representative screenshots or short output samples for visualization changes; never commit `.env`, checkpoints, input recordings, or generated results.
