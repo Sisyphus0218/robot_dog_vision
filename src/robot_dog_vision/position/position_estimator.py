@@ -1,0 +1,148 @@
+import numpy as np
+
+from robot_dog_vision.pose.pose_estimator import Keypoint2D
+from robot_dog_vision.utils import Point2D, Point3D
+
+
+class PositionEstimator:
+    def __init__(
+        self,
+        intrinsics: np.ndarray | None = None,
+    ) -> None:
+        # intrinsics = [[fx, 0, cx],
+        #               [0, fy, cy],
+        #               [0, 0, 1]]
+        if intrinsics is not None:
+            intrinsics = np.asarray(intrinsics, dtype=np.float32)
+
+            if intrinsics.shape != (3, 3):
+                raise ValueError(
+                    f"intrinsics must have shape (3, 3), got {intrinsics.shape}"
+                )
+
+        self.intrinsics = intrinsics
+
+    @staticmethod
+    def estimate_intrinsics(frame: np.ndarray) -> np.ndarray:
+        if not isinstance(frame, np.ndarray) or frame.ndim < 2:
+            raise ValueError("frame must be a NumPy array with at least 2 dimensions")
+
+        height, width = frame.shape[:2]
+        if width <= 0 or height <= 0:
+            raise ValueError("frame width and height must be positive")
+
+        focal_length = float(np.hypot(width, height))
+        return np.asarray(
+            [
+                [focal_length, 0.0, width / 2.0],
+                [0.0, focal_length, height / 2.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+
+    def deproject(
+        self,
+        depth_mm: float,
+        pixel: Point2D,
+    ) -> Point3D:
+        """
+        Deproject a pixel coordinate (u, v) with depth value (Z) to 3D coordinates (X, Y, Z).
+
+        Args:
+            depth_mm: Depth value in millimeters.
+            pixel: Pixel coordinates (u, v).
+
+        Returns:
+            Point3D: Camera-space coordinates in millimeters.
+        """
+
+        u, v = pixel.u, pixel.v
+
+        fx = float(self.intrinsics[0, 0])
+        fy = float(self.intrinsics[1, 1])
+        cx = float(self.intrinsics[0, 2])
+        cy = float(self.intrinsics[1, 2])
+
+        Z = float(depth_mm)
+
+        X = (u - cx) * Z / fx
+        Y = (v - cy) * Z / fy
+
+        return Point3D(X, Y, Z)
+
+    def estimate_keypoint_depth(
+        self,
+        depth_mm: np.ndarray,
+        pixel: Point2D,
+        radius: int = 3,
+    ) -> float | None:
+        u, v = pixel.u, pixel.v
+        height, width = depth_mm.shape[:2]
+
+        u = int(round(u))
+        v = int(round(v))
+        if not (0 <= u < width and 0 <= v < height):
+            return None
+
+        x1 = max(0, u - radius)
+        x2 = min(width, u + radius + 1)
+        y1 = max(0, v - radius)
+        y2 = min(height, v + radius + 1)
+
+        roi_depth = depth_mm[y1:y2, x1:x2]
+        valid_depth = roi_depth[
+            np.isfinite(roi_depth) & (roi_depth > 10) & (roi_depth < 10_000)
+        ]  # 1 cm～10 m
+
+        if valid_depth.size == 0:
+            return None
+
+        depth = float(np.median(valid_depth))
+
+        return depth
+
+    def estimate(
+        self,
+        depth_mm: np.ndarray | None,
+        pose: dict[str, Keypoint2D] | None,
+    ) -> Point3D | None:
+        """Return one camera-space position in millimeters."""
+        if depth_mm is None or pose is None:
+            return None
+
+        if self.intrinsics is None:
+            self.intrinsics = self.estimate_intrinsics(depth_mm)
+
+        joint_pairs = (
+            ("left_hip", "right_hip"),
+            ("left_shoulder", "right_shoulder"),
+            ("left_knee", "right_knee"),
+            ("left_ankle", "right_ankle"),
+        )
+
+        positions_3d: dict[str, Point3D] = {}
+        for pair in joint_pairs:
+            for name in pair:
+                keypoint = pose.get(name)
+                if keypoint is None:
+                    continue
+                depth = self.estimate_keypoint_depth(depth_mm, keypoint.position_2d)
+                if depth is None:
+                    continue
+                positions_3d[name] = self.deproject(depth, keypoint.position_2d)
+
+        # Prefer any complete pair over a single joint, in body-part order.
+        for left_name, right_name in joint_pairs:
+            left = positions_3d.get(left_name)
+            right = positions_3d.get(right_name)
+            if left is not None and right is not None:
+                return left.midpoint(right)
+
+        # No complete pair: use the first available joint in the same order.
+        for pair in joint_pairs:
+            for name in pair:
+                if name in positions_3d:
+                    return positions_3d[name]
+
+        return None
